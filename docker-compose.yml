@@ -1,0 +1,126 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: repowrapped_app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+      - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    environment:
+      - PHP_OPCACHE_ENABLE=0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - repowrapped
+      - default
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: repowrapped_nginx
+    restart: unless-stopped
+    volumes:
+      - .:/var/www/html
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    labels:
+      - "traefik.docker.network=gateway"
+      - "traefik.enable=true"
+      - "traefik.http.routers.repowrapped.tls=true"
+      - "traefik.http.routers.repowrapped.rule=Host(`repo-wrapped.app.localhost`)"
+      - "traefik.http.routers.repowrapped.entrypoints=websecure"
+    networks:
+      - repowrapped
+      - default
+      - backend
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: repowrapped_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: repowrapped
+      POSTGRES_USER: repowrapped
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U repowrapped -d repowrapped"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - repowrapped
+
+  redis:
+    image: redis:7-alpine
+    container_name: repowrapped_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - repowrapped
+
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: repowrapped_queue
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+    volumes:
+      - .:/var/www/html
+      - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - repowrapped
+      - default
+      - backend
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: repowrapped_cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - nginx
+    networks:
+      - repowrapped
+      - default
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    external: true
+    name: gateway
+  backend:
+    internal: true
+  repowrapped:
+    internal: true
