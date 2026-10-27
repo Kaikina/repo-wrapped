@@ -100,7 +100,7 @@ services:
       - backend
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.3
     container_name: repowrapped_cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run
